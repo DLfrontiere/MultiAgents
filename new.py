@@ -1,30 +1,19 @@
 
 import os
-from autogen import AssistantAgent, UserProxyAgent
-from autogen.coding import DockerCommandLineCodeExecutor
 from pathlib import Path
 from dotenv import load_dotenv
-from qdrant_client import QdrantClient
 import autogen
 from autogen.agentchat.contrib.qdrant_retrieve_user_proxy_agent import QdrantRetrieveUserProxyAgent,RetrieveUserProxyAgent
 from autogen.agentchat.contrib.retrieve_assistant_agent import AssistantAgent,RetrieveAssistantAgent
-from qdrant_client import QdrantClient
-from langchain_qdrant import Qdrant 
 from loading import Loader
 from langchain_experimental.text_splitter import SemanticChunker
-from langchain_openai import OpenAIEmbeddings
 
-#from autogen.agentchat.contrib.self_evaluation_agent import SelfEvaluationAgent
-
-# Accepted file formats for that can be stored in
-# a vector database instance
-from autogen.retrieve_utils import TEXT_FORMATS
 
 load_dotenv(Path("../api_key.env"))
 
 def main():
       
-
+    
     config_list=[{
         "model": "gpt-3.5-turbo",
         "api_key": os.environ.get("OPENAI_API_KEY"),
@@ -34,13 +23,9 @@ def main():
             "timeout": 600,
             "cache_seed": 42,
             "config_list": config_list,
+            "cache_root_path": "./custom_cache_path"
         }
     
-    rag_assistant = RetrieveAssistantAgent(
-        name="rag_assistent",
-        system_message="Sei un assistente di una compagnia di assicurazione.rispondi alle domande in base al contesto passato",
-        llm_config=llm_config
-    )
 
     EVAL_CUSTOM_PROMPT =  """Sei un valutatore di qualità della risposta di un chatbot per una compagnia di assicurazioni.
     In base alla domanda ed al contesto genera una label tra le seguenti: [CORRETTO,ERRATO].
@@ -54,27 +39,7 @@ def main():
     La risposta è: ""{input_answer}"".
     """
 
-    
 
-    user = autogen.UserProxyAgent(
-        name="User",
-        human_input_mode="ALWAYS",        
-    )
-
-    user_evaluator = UserProxyAgent(
-        name = "evaluator",
-        human_input_mode="ALWAYS",   
-        system_message="Devi valutare la risposta dell'assistente.",
-        llm_config=llm_config
-    )
-
-    evaluator_assistant = AssistantAgent(
-        name = "assistant_evaluator",
-        human_input_mode="NEVER", 
-        max_consecutive_auto_reply = 0,
-        system_message="Devi valutare la risposta dell'assistente.",
-        llm_config=llm_config
-    )
      
     files_path = "/home/utente/Desktop/Projects/CHATBOT_YOLO/ALL_FILES/COMPANY/SUB"
     
@@ -95,7 +60,11 @@ def main():
     )
 
     ragproxyagent = QdrantRetrieveUserProxyAgent(
-        name="qdrantagent",
+
+        name="admin",
+        system_message = """RAG answer generator,given a question and a context,
+        answer the question relying on the context. 
+        Then pass to the evaluator""",
         human_input_mode="NEVER",
         max_consecutive_auto_reply=10,
         retrieve_config={
@@ -108,49 +77,44 @@ def main():
             "embedding_model": "BAAI/bge-small-en-v1.5",
             "customized_prompt" : RETRIEVER_CUSTOM_PROMPT,
         },
-        code_execution_config=False,
+        code_execution_config=False
+
     )
  
-    rag_assistant.reset()
 
-    input_text  = ""
+    evaluator = autogen.AssistantAgent(
+        name="Evaluator",
+        system_message="Evaluator. Double check the answer is correct and coeherence with the context passed,provide feeback",
+        llm_config=llm_config,
+    )
 
-    #gli indennizzi sono cumulabili?
-    while input_text != "exit":
+    corrector = autogen.AssistantAgent(
+        name="Corrector",
+        system_message="Corrector. Correct the answer using the feedback and the context",
+        llm_config=llm_config,
+    )
 
-        #read the prompt
-        input_text = input("insert input (""exit"" to esc):")
-        if input_text == "exit": break
-
-        #pass the prompt to RAG user proxy agent
-        chat_result = ragproxyagent.initiate_chat(rag_assistant, message=ragproxyagent.message_generator, silent=True, problem=input_text)
         
-        #extract context and response
-        print("RESPONSE",chat_result.chat_history[-1]['content'])
-        response_content = chat_result.chat_history[-1]['content']
-        retrieved_doc_contents = ragproxyagent._get_context(ragproxyagent._results)
+    groupchat = autogen.GroupChat(
+    agents=[ragproxyagent,evaluator,corrector], messages=[], max_round=50
+    )
 
-        #setup message for evaluator
-        evaluation_prompt = EVAL_CUSTOM_PROMPT.format(
-            input_question=input_text,
-            input_context=retrieved_doc_contents,
-            input_answer=response_content
+    for agent in groupchat.agents:
+        agent.reset()
+
+    manager = autogen.GroupChatManager(groupchat=groupchat, llm_config=llm_config)
+
+    user_message = input("Insert prompt:""(exit to esc)"" ")
+
+    while user_message!="exit":
+        ragproxyagent.initiate_chat(
+            manager,
+            message=user_message
         )
+        user_message = input("Insert prompt:""(exit to esc)"" ")
 
-        #evaluate answer
-        
-        chat_results = user.initiate_chats([{
-            "recipient": evaluator_assistant,
-            "message" : evaluation_prompt,
-
-        }])
-        #print(chat_results)
-        print("EVAL",chat_results[0].chat_history[-1]['content'])
-        
-
-
-  
 
 
 if __name__ == "__main__":
     main()
+
