@@ -1,80 +1,35 @@
 
 import os
-from autogen import AssistantAgent, UserProxyAgent
-from autogen.coding import DockerCommandLineCodeExecutor
 from pathlib import Path
 from dotenv import load_dotenv
-from qdrant_client import QdrantClient
 import autogen
 from autogen.agentchat.contrib.qdrant_retrieve_user_proxy_agent import QdrantRetrieveUserProxyAgent,RetrieveUserProxyAgent
 from autogen.agentchat.contrib.retrieve_assistant_agent import AssistantAgent,RetrieveAssistantAgent
-from qdrant_client import QdrantClient
-from langchain_qdrant import Qdrant 
-from loading import Loader
-from langchain_experimental.text_splitter import SemanticChunker
-from langchain_openai import OpenAIEmbeddings
-
-#from autogen.agentchat.contrib.self_evaluation_agent import SelfEvaluationAgent
-
-# Accepted file formats for that can be stored in
-# a vector database instance
-from autogen.retrieve_utils import TEXT_FORMATS
+from typing_extensions import Annotated
+from autogen.agentchat import Agent,GroupChat
+from typing import Callable, Dict, List, Literal, Optional, Tuple, Union
 
 load_dotenv(Path("../api_key.env"))
 
-def main():
-      
+def termination_msg(x):
+    return isinstance(x, dict) and "TERMINATE" == str(x.get("content", ""))[-9:].upper()
 
+def main():
+
+    
     config_list=[{
-        "model": "gpt-3.5-turbo",
+        "model": "gpt-4-turbo",
         "api_key": os.environ.get("OPENAI_API_KEY"),
     }]
 
     llm_config={
             "timeout": 600,
             "cache_seed": 42,
-            "config_list": config_list,
+            "config_list": config_list
+            #"cache_root_path": "./custom_cache_path"
         }
     
-    rag_assistant = RetrieveAssistantAgent(
-        name="rag_assistent",
-        system_message="Sei un assistente di una compagnia di assicurazione.rispondi alle domande in base al contesto passato",
-        llm_config=llm_config
-    )
 
-    EVAL_CUSTOM_PROMPT =  """Sei un valutatore di qualità della risposta di un chatbot per una compagnia di assicurazioni.
-    In base alla domanda ed al contesto genera una label tra le seguenti: [CORRETTO,ERRATO].
-
-    Rispondi nel seguente formato: " --LABEL-- --spiegazione scelta label-- --se erratta,riscrivi la risposta correttamente-- ".
-
-    La domanda dell'utente è: ""{input_question}"".
-
-    Il contesto è: ""{input_context}"".
-
-    La risposta è: ""{input_answer}"".
-    """
-
-    
-
-    user = autogen.UserProxyAgent(
-        name="User",
-        human_input_mode="ALWAYS",        
-    )
-
-    user_evaluator = UserProxyAgent(
-        name = "evaluator",
-        human_input_mode="ALWAYS",   
-        system_message="Devi valutare la risposta dell'assistente.",
-        llm_config=llm_config
-    )
-
-    evaluator_assistant = AssistantAgent(
-        name = "assistant_evaluator",
-        human_input_mode="NEVER", 
-        max_consecutive_auto_reply = 0,
-        system_message="Devi valutare la risposta dell'assistente.",
-        llm_config=llm_config
-    )
      
     files_path = "/home/utente/Desktop/Projects/CHATBOT_YOLO/ALL_FILES/COMPANY/SUB"
     
@@ -94,14 +49,28 @@ def main():
     "Contesto: ""{input_context}"" "
     )
 
+
+
+    boss = autogen.UserProxyAgent(
+        name="Boss",
+        is_termination_msg=termination_msg,
+        human_input_mode="NEVER",
+        code_execution_config=False,  # we don't want to execute code in this case.
+        default_auto_reply="Rispondi solo `TERMINATE` se il task è finito",
+        description="Il boss che fa domande e fornisce i task.",
+    )
+
     ragproxyagent = QdrantRetrieveUserProxyAgent(
-        name="qdrantagent",
+
+        name="rag",
+        is_termination_msg=termination_msg,
         human_input_mode="NEVER",
         max_consecutive_auto_reply=10,
         retrieve_config={
             "docs_path":files_path,
             "task": "default",
             "chunk_token_size": 2000,
+            #"custom_text_split_function": SemanticChunker(),
             #"client": client
             "vector_db": "chroma",
             "model": config_list[0]["model"],#chroma,pgvector
@@ -109,48 +78,144 @@ def main():
             "customized_prompt" : RETRIEVER_CUSTOM_PROMPT,
         },
         code_execution_config=False,
+        description = "assistente che genera il contesto per rispondere al task"
+    
     )
  
-    rag_assistant.reset()
 
-    input_text  = ""
+    assistant = AssistantAgent(
+        name="Assistente",
+        is_termination_msg=termination_msg,
+        system_message="""
+                        Risponde alla domanda in base al contesto e passa la risposta al valutatore.
+                        """,
+        llm_config=llm_config,
+    )
 
-    #gli indennizzi sono cumulabili?
-    while input_text != "exit":
+    evaluator = AssistantAgent(
+        name="Valutatore",
+        is_termination_msg=termination_msg,
+        system_message="""
+                        Valutatore. Ricontrolla che la risposta 
+                        sia corretta e coerente con il contesto fornito, 
+                        fornisci un feedback al correttore se la risposta
+                        non è corretta rispetto al contesto.
+                        Rispondi "TERMINATE" se la risposta è corretta.
+                        """,
+        default_auto_reply="Rispondi solo `TERMINATE` se la risposta è corretta",
+        llm_config=llm_config,
+    )
 
-        #read the prompt
-        input_text = input("insert input (""exit"" to esc):")
-        if input_text == "exit": break
+    corrector = AssistantAgent(
+        name="Correttore",
+        is_termination_msg=termination_msg,
+        system_message="""
+            Correttore. Correggi la risposta 
+            utilizzando il feedback 
+            e il contesto del valutatore,restituisci la risposta corretta al valutatore,
+            senza commenti""",
+        llm_config=llm_config,
+        #default_auto_reply="Rispondi solo `TERMINATE` se la risposta è corretta rispetto al contesto.",
+    )
 
-        #pass the prompt to RAG user proxy agent
-        chat_result = ragproxyagent.initiate_chat(rag_assistant, message=ragproxyagent.message_generator, silent=True, problem=input_text)
+    refiner = AssistantAgent(
+        name="Rifinitore",
+        is_termination_msg=termination_msg,
+        system_message="""
+            Rifinitore. Riscrivi la risposta considerando che sei un chatbot 
+            di un'assicurazione (Yolo-Insurance). Quando citi la nostra compagnia di assicurazione parla in 
+            prima personale plurale (e.g contatta la nostra assistenza clienti). Elimina eventuali riferimenti
+            ai documenti utilizzati per ricavare alla risposta ed elimina eventuali riferimenti ad altre compagnie.
+            """,
+        llm_config=llm_config,
+        #default_auto_reply="Rispondi solo `TERMINATE` se la risposta è corretta rispetto al contesto.",
+    )
+
         
-        #extract context and response
-        print("RESPONSE",chat_result.chat_history[-1]['content'])
-        response_content = chat_result.chat_history[-1]['content']
-        retrieved_doc_contents = ragproxyagent._get_context(ragproxyagent._results)
 
-        #setup message for evaluator
-        evaluation_prompt = EVAL_CUSTOM_PROMPT.format(
-            input_question=input_text,
-            input_context=retrieved_doc_contents,
-            input_answer=response_content
+
+    def custom_speaker_selection_func(
+            last_speaker: Agent, groupchat: GroupChat
+        ) -> Union[Agent, str, None]:
+
+        next_speaker_map = {
+            'evaluator': corrector,
+            'corrector': evaluator,
+            'refiner': evaluator
+        }
+
+        print(f"last_speaker is {last_speaker.name}")
+        return next_speaker_map.get(last_speaker.name, "auto")
+
+        
+
+    def reset_agents(agents):
+        for agent in agents:
+            agent.reset()
+
+
+
+
+    def call_rag_chat(user_input):
+
+
+        # In this case, we will have multiple user proxy agents and we don't initiate the chat
+        # with RAG user proxy agent.
+        # In order to use RAG user proxy agent, we need to wrap RAG agents in a function and call
+        # it from other agents.
+
+        def retrieve_content(
+            message: Annotated[
+                str,
+                "Testo originale utile a trovare il contesto per rispondere alle domande",
+            ],
+            n_results: Annotated[int, "number of results"] = 5,
+        ) -> str:
+            ragproxyagent.n_results = n_results  # Set the number of results to be retrieved.
+            # Check if we need to update the context.
+            update_context_case1, update_context_case2 = ragproxyagent._check_update_context(message)
+            if (update_context_case1 or update_context_case2) and ragproxyagent.update_context:
+                ragproxyagent.problem = message if not hasattr(ragproxyagent, "problem") else ragproxyagent.problem
+                _, ret_msg = ragproxyagent._generate_retrieve_user_reply(message)
+            else:
+                _context = {"problem": message, "n_results": n_results}
+                ret_msg = ragproxyagent.message_generator(ragproxyagent, None, _context)
+            return ret_msg if ret_msg else message
+
+        ragproxyagent.human_input_mode = "NEVER"  # Disable human input for boss_aid since it only retrieves content.
+
+        for caller in [assistant,evaluator,corrector]:
+            d_retrieve_content = caller.register_for_llm(
+                description="Recupera il contesto per effettuare meglio il compito", api_style="function"
+            )(retrieve_content)
+
+        for executor in [boss,ragproxyagent]:
+            executor.register_for_execution()(d_retrieve_content)
+
+        groupchat = autogen.GroupChat(
+            agents=[boss,ragproxyagent,assistant,evaluator,corrector,refiner],
+            messages=[],
+            max_round=12,
+            speaker_selection_method=custom_speaker_selection_func,
+            allow_repeat_speaker=False,
         )
 
-        #evaluate answer
-        
-        chat_results = user.initiate_chats([{
-            "recipient": evaluator_assistant,
-            "message" : evaluation_prompt,
+        reset_agents(groupchat.agents)
 
-        }])
-        #print(chat_results)
-        print("EVAL",chat_results[0].chat_history[-1]['content'])
-        
+        manager = autogen.GroupChatManager(groupchat=groupchat, llm_config=llm_config)
 
+        # Start chatting with the boss as this is the user proxy agent.
+        boss.initiate_chat(
+            manager,
+            message=user_input,
+        )
 
-  
+    user_message = input("Insert prompt:""(exit to esc)"" ")
 
+    while user_message!="exit":
+        call_rag_chat(user_message)
+        user_message = input("Insert prompt:""(exit to esc)"" ")
 
 if __name__ == "__main__":
     main()
+
