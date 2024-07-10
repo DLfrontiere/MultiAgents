@@ -26,6 +26,10 @@ pip install -r requirements.txt
 
 change the files_path variable value with the path of the documents to be retrieved
 
+add a file api_key.env with your api key to use the model
+
+modify the prompt and system messages of each agent to be compliant with your use-case.
+
 ```bash
 python3 main.py
 ```
