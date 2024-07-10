@@ -3,10 +3,10 @@
 ## Description
 This project implements a multi-agent system using Python. It utilizes the `autogen` library for agent generation and interaction.
 
-![alt text](https://github.com/DLfrontiere/MultiAgents/blob/main/MultiAgents_diagram.png?raw=true)
+![alt text](https://github.com/DLfrontiere/MultiAgents/blob/master/MultiAgents_diagram.png?raw=true)
 
 - The manager handles the user input and the interactions between agents.
-- the Rag is based on Qdrant.
+- the Rag is based on Qdrant and retrieve top k similar chunks.
 - the assistant answer the question using question and context.
 - the evaluator check if the answer is coeherent with question and context.
  if the feedback is positive the answer is returned to the manager.
