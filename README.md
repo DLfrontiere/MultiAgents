@@ -15,7 +15,7 @@ This project implements a multi-agent system using Python. It utilizes the `auto
  if the feedback is negative the answer,the context and feedback is passed to the corrector.
  
 - the corrector fix the asnwer using the feedback,the answer and the context.
-- the refiner adjust the answer to be a chatbot-like answer.
+- the refiner adjust the answer as a chatbot-like answer.
   
 ## Installation
 ```bash
