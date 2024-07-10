@@ -11,6 +11,7 @@ This project implements a multi-agent system using Python. It utilizes the `auto
 - the evaluator check if the answer is coeherent with question and context.
   
  if the feedback is positive the answer is returned to the manager.
+ 
  if the feedback is negative the answer,the context and feedback is passed to the corrector.
  
 - the corrector fix the asnwer using the feedback,the answer and the context.
